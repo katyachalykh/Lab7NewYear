@@ -1,0 +1,10 @@
+startupF411RE.pbi: F:\New\ Year\startupF411RE.cpp \
+  F:\New\ Year\AHardware\Registers\STM32F411\rccregisters.hpp \
+  F:\New\ Year\AHardware\Registers\STM32F411\FieldValues\rccfieldvalues.hpp \
+  F:\New\ Year\AHardware\Registers\fieldvalue.hpp \
+  D:\Проги\ для\ учебы\arm\inc\cpp\cstddef \
+  D:\Проги\ для\ учебы\arm\inc\c\stddef.h \
+  D:\Проги\ для\ учебы\arm\inc\c\ycheck.h \
+  D:\Проги\ для\ учебы\arm\inc\c\yvals.h \
+  D:\Проги\ для\ учебы\arm\inc\c\DLib_Defaults.h \
+  D:\Проги\ для\ учебы\arm\inc\c\DLib_Product.h

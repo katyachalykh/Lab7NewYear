@@ -1,0 +1,538 @@
+=== _Задание_:
+
+Создать "Новогоднюю ёлку" из светодиодов на плате, которые моргают с частотой 100 мс,
+а при нажатии на кнопку частота увеличивается на 100 мс, при достижении частоты в 1 с,
+последующие нажатия кнопки уменьшают частоту на 100 мс.
+
+=== _Выполнение задания_:
+
+Программа построена по принципу объектно-ориентированного программирования.
+
+Для того чтобы правильно обозначить все необходимые элементы, в программе UML было создана
+структура будущей программы, показанная на рисунке 1.
+
+.Структура программы
+image::../ChalykhKadyrov_NewYear/Photo/1UMLTree.jpg[]
+
+Суть данной иерархии в том, что класс *Port*, где мы подключаемся к портам свтодиодов и
+кнопки. И через интерфейс _IPort_ передаем эти значения классу *Pin*. Далее через интерфейсы
+_IPinToggle_ и _IPinGet_ общаемся с классами *Led* и *Button* соответственно. После чего
+методы из данных классов передаются в класс *Garlands*, куда также подключается класс *Timer*
+где мы подкючили TIM2.
+
+В классе *Garlands* происходит измененеие частоты мерцания свтодиодов при нажатии кнопки,
+а также вывод действующей частоты в терминал.
+
+После этого объединяем все это в классе *Tree*.
+
+Код программы представлен ниже.
+
+
+=== _Код класса Port_
+
+----
+#pragma once
+#include <cstdint> //äëÿ std::uint32_t, uint8_t
+#include <cassert>
+
+class IPort
+{
+  public:
+    virtual void Toggle (std::uint8_t num)=0;
+    virtual std::uint32_t Get() = 0;
+};
+
+template <typename Reg>
+class Port: public IPort
+{
+  public:
+    void Toggle (std::uint8_t num) override
+    {
+      assert(num < 16);
+      Reg::ODR::Toggle(1 << num);
+    }
+
+    std::uint32_t Get() override
+    {
+      return Reg::IDR::Get();
+    }
+
+};
+----
+
+=== _Код класса Pin_
+
+----
+#pragma once
+#include "port.hpp"
+
+class IPinToggle
+{
+  public:
+    virtual void Toggle() = 0;
+};
+
+class IPinGet
+{
+  public:
+    virtual bool IsSet() = 0;
+};
+
+class Pin: public IPinToggle, public IPinGet
+{
+  public:
+    Pin(std::uint8_t num, IPort& aPort): number(num), port(aPort)
+    {
+    }
+    void Toggle() override
+    {
+      port.Toggle(number);
+    }
+
+    bool IsSet() override
+    {
+      return ((port.Get()& (1 << number)) != 0U);
+    }
+
+  private:
+    std::uint8_t number;
+    IPort& port;
+
+};
+----
+
+=== _Код класса Led_
+
+----
+#pragma once
+#include "pin.hpp"
+
+class Led
+{
+  public:
+    Led(IPinToggle& aPin): pin(aPin)
+    {
+    }
+    void Toggle()
+    {
+      pin.Toggle();
+    }
+  private:
+    IPinToggle& pin;
+};
+----
+
+=== _Код класса Button_
+
+----
+#pragma once
+#include "pin.hpp"
+#include "port.hpp"
+
+class Button
+{
+  public:
+    Button(IPinGet& aPin): pin(aPin)
+    {
+    }
+
+    bool IsPressed()
+    {
+      return !pin.IsSet();
+
+    }
+  private:
+    IPinGet& pin;
+};
+----
+
+=== _Код Pincofig_
+
+----
+#pragma once
+
+#include "rccregisters.hpp"
+#include "gpiocregisters.hpp"
+#include "gpioaregisters.hpp"
+#include <iostream>
+#include <bitset>
+#include "port.hpp"
+#include "pin.hpp"
+#include "led.hpp"
+#include "button.hpp"
+
+
+inline Port<GPIOC> PortC;
+inline Port<GPIOA> PortA;
+
+inline Pin Led1Pin(5U, PortC);
+inline Pin Led2Pin(8U, PortC);
+inline Pin Led3Pin(9U, PortC);
+inline Pin Led4Pin(5U, PortA);
+----
+
+=== _Код класса Timer_
+
+----
+#pragma once
+
+
+class Timer
+{
+  public:
+    void Start(uint32_t Period)
+    {
+      NVIC::ISER0::Write(1<<28);
+      TIM2::CR1::URS::OverflowEvent::Set();
+      RCC::APB1ENR::TIM2EN::Enable::Set();
+      TIM2::PSC::Set(7999U);
+      TIM2::ARR::Write(Period);
+      TIM2::SR::UIF::NoInterruptPending::Set();
+      TIM2::CNT::Write(0U);
+      TIM2::DIER::UIE::Enable::Set();
+      TIM2::CR1::CEN::Enable::Set();
+      while (!TIM2::SR::UIF::NoInterruptPending::IsSet() )
+      {
+      }
+
+    }
+    void ChangePeriod (uint32_t Period)
+    {
+      TIM2::ARR::Write(Period);
+    }
+};
+----
+
+=== _Код startup_
+
+----
+#pragma language = extended
+#pragma segment = "CSTACK"
+#include "rccregisters.hpp"
+#include "gpiocregisters.hpp"
+#include "gpioaregisters.hpp"
+#include <iostream>
+#include <bitset>
+#include "port.hpp"
+#include "pin.hpp"
+#include "led.hpp"
+#include "button.hpp"
+#include "garlands.hpp"
+
+extern "C" void __iar_program_start( void );
+extern Garlands garlands;
+class TIM2int
+{
+   public:
+    static void handler()
+    {
+      garlands.HandleInterrupt();
+      TIM2::SR::UIF::NoInterruptPending::Set();
+    }
+
+};
+
+class DummyModule
+{
+  public:
+    static void handler();
+
+};
+
+using tIntFunct = void(*)();
+//cstat !MISRAC++2008-9-5-1
+using tIntVectItem = union {tIntFunct __fun; void * __ptr;};
+
+// The vector table is normally located at address 0.
+// When debugging in RAM, it can be located in RAM, aligned to at least 2^6.
+// If you need to define interrupt service routines,
+// make a copy of this file and include it in your project.
+// The name "__vector_table" has special meaning for C-SPY:
+// it is where the SP start value is found, and the NVIC vector
+// table register (VTOR) is initialized to this address if != 0.
+
+#pragma location = ".intvec"
+//cstat !MISRAC++2008-0-1-4_b !MISRAC++2008-9-5-1
+extern "C" const tIntVectItem __vector_table[] =
+{
+  { .__ptr = __sfe( "CSTACK" ) },
+  __iar_program_start,
+
+  DummyModule::handler,
+  DummyModule::handler,
+  DummyModule::handler,
+  DummyModule::handler,
+  DummyModule::handler,
+  0,
+  0,
+  0,
+  0,
+  DummyModule::handler,
+  DummyModule::handler,
+  0,
+  DummyModule::handler,
+  DummyModule::handler,
+  //External Interrupts
+  DummyModule::handler,         //Window Watchdog
+  DummyModule::handler,         //PVD through EXTI Line detect/EXTI16
+  DummyModule::handler,         //Tamper and Time Stamp/EXTI21
+  DummyModule::handler,         //RTC Wakeup/EXTI22
+  DummyModule::handler,         //FLASH
+  DummyModule::handler,         //RCC
+  DummyModule::handler,         //EXTI Line 0
+  DummyModule::handler,         //EXTI Line 1
+  DummyModule::handler,         //EXTI Line 2
+  DummyModule::handler,         //EXTI Line 3
+  DummyModule::handler,         //EXTI Line 4
+  DummyModule::handler,         //DMA1 Stream 0
+  DummyModule::handler,         //DMA1 Stream 1
+  DummyModule::handler,         //DMA1 Stream 2
+  DummyModule::handler,         //DMA1 Stream 3
+  DummyModule::handler,         //DMA1 Stream 4
+  DummyModule::handler,         //DMA1 Stream 5
+  DummyModule::handler,         //DMA1 Stream 6
+  DummyModule::handler,         //ADC1
+  0,                            //USB High Priority
+  0,                            //USB Low  Priority
+  0,                            //DAC
+  0,                            //COMP through EXTI Line
+  DummyModule::handler,         //EXTI Line 9..5
+  DummyModule::handler,         //TIM9/TIM1 Break interrupt
+  DummyModule::handler,         //TIM10/TIM1 Update interrupt
+  DummyModule::handler,         //TIM11/TIM1 Trigger/Commutation interrupts
+  DummyModule::handler,		//TIM1 Capture Compare interrupt
+  TIM2int::handler,         //TIM2
+  DummyModule::handler,         //TIM3
+  DummyModule::handler,         //TIM4
+  DummyModule::handler,         //I2C1 Event
+  DummyModule::handler,         //I2C1 Error
+  DummyModule::handler,         //I2C2 Event
+  DummyModule::handler,         //I2C2 Error
+  DummyModule::handler,         //SPI1
+  DummyModule::handler,         //SPI2
+  DummyModule::handler,         //USART1
+  DummyModule::handler,         //USART2
+  0,
+  DummyModule::handler,         //EXTI Line 15..10
+  DummyModule::handler,         //EXTI Line 17 interrupt / RTC Alarms (A and B) through EXTI line interrupt
+  DummyModule::handler,         //EXTI Line 18 interrupt / USB On-The-Go  FS Wakeup through EXTI line interrupt
+  0,				//TIM6
+  0,				//TIM7  f0
+  0,
+  0,
+  DummyModule::handler,         //DMA1 Stream 7 global interrupt fc
+  0,
+  DummyModule::handler,	        //SDIO global interrupt
+  DummyModule::handler,	        //TIM5 global interrupt
+  DummyModule::handler,	        //SPI3 global interrupt
+  0,			        // 110
+  0,
+  0,
+  0,
+  DummyModule::handler,		//DMA2 Stream0 global interrupt 120
+  DummyModule::handler,		//DMA2 Stream1 global interrupt
+  DummyModule::handler,		//DMA2 Stream2 global interrupt
+  DummyModule::handler,		//DMA2 Stream3 global interrupt
+  DummyModule::handler,		//DMA2 Stream4 global interrupt 130
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  DummyModule::handler,		//USB On The Go FS global interrupt, 14C
+  DummyModule::handler,		//DMA2 Stream5 global interrupt
+  DummyModule::handler,		//DMA2 Stream6 global interrupt
+  DummyModule::handler,		//DMA2 Stream7 global interrupt
+  DummyModule::handler,				//USART6 15C
+  DummyModule::handler,         //I2C3 Event
+  DummyModule::handler,         //I2C3 Error 164
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  DummyModule::handler,		//FPU 184
+  0,
+  0,
+  DummyModule::handler,		//SPI 4 global interrupt
+  DummyModule::handler		//SPI 5 global interrupt
+};
+
+void DummyModule::handler()   { for(;;) {} } ;
+
+extern "C" void __cmain( void );
+extern "C" __weak void __iar_init_core( void );
+extern "C" __weak void __iar_init_vfp( void );
+
+#pragma required=__vector_table
+void __iar_program_start( void )
+{
+  __iar_init_core();
+  __iar_init_vfp();
+  __cmain();
+}
+----
+
+=== _Код класса Garlands_
+
+----
+#pragma once
+#include "pin.hpp"
+#include "port.hpp"
+#include <array>
+#include "pinconfig.hpp"
+#include "tim2registers.hpp"
+#include "nvicregisters.hpp"
+#include "timer.hpp"
+#include <iostream>
+
+extern Timer timer;
+class Garlands
+{
+  public:
+    Garlands(Button& aButton): button(aButton), leds
+                                                {
+                                                  Led(Led1Pin),
+                                                  Led(Led2Pin),
+                                                  Led(Led3Pin),
+                                                  Led(Led4Pin)
+                                                }
+    {
+    }
+    void Update()
+    {
+      if (flag==0)
+      {
+        deltaPeriod = Period+100;
+        if (deltaPeriod==1100)
+        {
+          flag=1;
+        }
+      }
+
+      if (flag==1)
+      {
+        deltaPeriod = Period-100;
+        if (deltaPeriod==100)
+        {
+          flag=0;
+
+        }
+      }
+      Period = deltaPeriod;
+      std::cout << "Период: " << Period << " мс." <<std::endl;
+      timer.ChangePeriod(Period);
+    }
+    void HandleInterrupt()
+    {
+      leds[i++].Toggle();
+      if (i==4)
+      {
+        i=0;
+      }
+    }
+
+    void Start ()
+    {
+      timer.Start(Period);
+    }
+
+  private:
+     std::array<Led, 4> leds;
+     int i = 0;
+     Button& button;
+     uint32_t Period =100U;
+     bool flag=0;
+     uint32_t deltaPeriod;
+};
+----
+
+=== _Код класса Tree_
+
+----
+#pragma once
+#include "garlands.hpp"
+
+extern Garlands garlands;
+class Tree
+{
+  public:
+    void Update ()
+    {
+      garlands.Start();
+    }
+};
+----
+
+=== _Код класса Main_
+
+----
+#include "rccregisters.hpp"
+#include "gpiocregisters.hpp"
+#include "gpioaregisters.hpp"
+#include <iostream>
+#include <bitset>
+#include "button.hpp"
+#include "pinconfig.hpp"
+#include "garlands.hpp"
+#include "tim2registers.hpp"
+#include "nvicregisters.hpp"
+#include "tree.hpp"
+
+
+unsigned int ButPeriod = 100U;
+unsigned int LedsPeriod = 500U;
+unsigned int counter = 0;
+
+extern "C"
+{
+  int __low_level_init(void)
+  {
+    RCC::CR::HSEON::On::Set();
+    while(!RCC::CR::HSERDY::Ready::IsSet())
+    {
+    }
+
+    RCC::CFGR::SW::Hse::Set();
+    while(!RCC::CFGR::SWS::Hse::IsSet())
+    {
+    }
+
+    RCC::CR::HSION::Off::Set();
+
+    RCC::AHB1ENR::GPIOCEN::Enable::Set();
+    RCC::AHB1ENR::GPIOAEN::Enable::Set();
+    GPIOC::MODER::MODER5::Output::Set();
+    GPIOC::MODER::MODER13::Input::Set();
+    GPIOA::MODER::MODER5::Output::Set();
+    GPIOC::MODER::MODER9::Output::Set();
+    GPIOC::MODER::MODER8::Output::Set();
+    return 1;
+  }
+}
+Pin buttonPin(13U, PortC);
+
+Button button(buttonPin);
+
+Garlands garlands(button);
+
+Timer timer;
+
+Tree tree;
+
+int main()
+{
+  tree.Update();
+  for(;;)
+  {
+    if (button.IsPressed())
+    {
+      garlands.Update();
+    }
+  }
+  return 0;
+}
+----
